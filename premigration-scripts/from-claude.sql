@@ -113,85 +113,7 @@ GRANT ALL PRIVILEGES ON DATABASE   <DB_NAME>             TO <MIGRATION_USER>;
 GRANT ALL PRIVILEGES ON ALL TABLES    IN SCHEMA public   TO <MIGRATION_USER>;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public   TO <MIGRATION_USER>;
 GRANT CREATE                          ON DATABASE <DB_NAME> TO <MIGRATION_USER>;
-ALTER ROLE <MIGRATION_USER> CREATEDB;
 
-
--- =============================================================================
--- SECTION 3 -- GC TTL (gc.ttlseconds = 1200) ON ALL v1.11.10 TABLES
---
--- Applied to all 17 tables that exist on the restored v1.11.10 snapshot.
--- Tables created BY the migration (hydra_oauth2_flow, etc.) must be configured
--- in a post-migration pass (see Section 7).
---
--- NOTE on the 4 login/consent tables:
---   hydra_oauth2_authentication_request, _handled, hydra_oauth2_consent_request,
---   _handled are DROPPED by migration 20211019000001000000 after their data is
---   moved to hydra_oauth2_flow.  Setting gc.ttlseconds on them before migration
---   avoids CRDB GC-window contention during the large data-move + DROP phase
---   on a live multi-region cluster.
--- =============================================================================
-
--- ---- GLOBAL tables ----------------------------------------------------------
-
-ALTER TABLE hydra_client
-  CONFIGURE ZONE USING gc.ttlseconds = 1200;
-
-ALTER TABLE hydra_jwk
-  CONFIGURE ZONE USING gc.ttlseconds = 1200;
-
-ALTER TABLE schema_migration
-  CONFIGURE ZONE USING gc.ttlseconds = 1200;
-
--- ---- REGIONAL BY ROW tables: token stores -----------------------------------
-
-ALTER TABLE hydra_oauth2_access
-  CONFIGURE ZONE USING gc.ttlseconds = 1200;
-
-ALTER TABLE hydra_oauth2_refresh
-  CONFIGURE ZONE USING gc.ttlseconds = 1200;
-
-ALTER TABLE hydra_oauth2_code
-  CONFIGURE ZONE USING gc.ttlseconds = 1200;
-
-ALTER TABLE hydra_oauth2_oidc
-  CONFIGURE ZONE USING gc.ttlseconds = 1200;
-
-ALTER TABLE hydra_oauth2_pkce
-  CONFIGURE ZONE USING gc.ttlseconds = 1200;
-
--- ---- REGIONAL BY ROW tables: login/consent flow (merged and dropped by
---      migration 20211019000001000000) ----------------------------------------
-
-ALTER TABLE hydra_oauth2_authentication_request
-  CONFIGURE ZONE USING gc.ttlseconds = 1200;
-
-ALTER TABLE hydra_oauth2_authentication_request_handled
-  CONFIGURE ZONE USING gc.ttlseconds = 1200;
-
-ALTER TABLE hydra_oauth2_consent_request
-  CONFIGURE ZONE USING gc.ttlseconds = 1200;
-
-ALTER TABLE hydra_oauth2_consent_request_handled
-  CONFIGURE ZONE USING gc.ttlseconds = 1200;
-
--- ---- REGIONAL BY ROW tables: session stores ---------------------------------
-
-ALTER TABLE hydra_oauth2_authentication_session
-  CONFIGURE ZONE USING gc.ttlseconds = 1200;
-
-ALTER TABLE hydra_oauth2_obfuscated_authentication_session
-  CONFIGURE ZONE USING gc.ttlseconds = 1200;
-
--- ---- REGIONAL BY ROW tables: other ------------------------------------------
-
-ALTER TABLE hydra_oauth2_logout_request
-  CONFIGURE ZONE USING gc.ttlseconds = 1200;
-
-ALTER TABLE hydra_oauth2_trusted_jwt_bearer_issuer
-  CONFIGURE ZONE USING gc.ttlseconds = 1200;
-
-ALTER TABLE hydra_oauth2_jti_blacklist
-  CONFIGURE ZONE USING gc.ttlseconds = 1200;
 
 
 -- =============================================================================
@@ -403,13 +325,7 @@ ORDER  BY table_name;
 --   hydra_oauth2_trusted_jwt_bearer_issuer
 --   schema_migration
 
--- 7d. GC TTL spot-check:
-SHOW ZONE CONFIGURATION FOR TABLE hydra_oauth2_jti_blacklist;
-SHOW ZONE CONFIGURATION FOR TABLE hydra_oauth2_authentication_request;
-SHOW ZONE CONFIGURATION FOR TABLE hydra_oauth2_consent_request_handled;
--- All should show gc.ttlseconds = 1200
-
--- 7e. Confirm role setting is persisted:
+-- 7d. Confirm role setting is persisted:
 SHOW ALTER ROLE <MIGRATION_USER>;
 -- Expect: sql_safe_updates = off
 */
@@ -444,23 +360,20 @@ SHOW ALTER ROLE <MIGRATION_USER>;
   ALTER TABLE hydra_oauth2_trusted_jwt_bearer_issuer         ALTER LOCALITY REGIONAL BY ROW;
   ALTER TABLE hydra_oauth2_jti_blacklist                     ALTER LOCALITY REGIONAL BY ROW;
 
-  -- 2. GC TTL on newly-created tables:
-  ALTER TABLE hydra_oauth2_flow CONFIGURE ZONE USING gc.ttlseconds = 1200;
-
-  -- 3. Restore per-index / per-partition zone configurations on all
+  -- 2. Restore per-index / per-partition zone configurations on all
   --    REGIONAL BY ROW tables to match your original partition layout.
   --    Run your existing partition-restore script here.
 
-  -- 4. Multi-region integrity validation:
+  -- 3. Multi-region integrity validation:
   SELECT * FROM crdb_internal.invalid_objects;
   SELECT crdb_internal.validate_multi_region_zone_configs();
 
-  -- 5. Row-count sanity checks:
+  -- 4. Row-count sanity checks:
   SELECT count(*) FROM hydra_oauth2_flow;
   SELECT count(*) FROM hydra_oauth2_access;
   SELECT count(*) FROM hydra_client;
 
-  -- 6. Confirm nid column is present on key tables:
+  -- 5. Confirm nid column is present on key tables:
   SELECT column_name FROM information_schema.columns
    WHERE table_name IN ('hydra_oauth2_flow', 'hydra_oauth2_access', 'hydra_client')
      AND column_name = 'nid';
